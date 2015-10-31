@@ -1,0 +1,315 @@
+<div class="downloadpopup">
+	<div class="modal-dialog">
+    	<div class="modal-content">
+			<div class="modal-header">
+		    	<a class="close" data-dismiss="modal">&times;</a>
+		    	<h3>Download / Checkout</h3>
+		  	</div>
+		    <div class="modal-body">
+				<div class="checkoutMessage initialhide"></div>
+				<div class="downloadStatus initialhide alert alert-info"></div>
+				<div class="message alert initialhide"></div>
+				<div class="progressBarHolder"></div>
+				
+				<div class="downloadProgressBar progress initialhide">
+					<div class="progress-bar" style="width: 0;"></div>
+				</div>
+				<div class="fields">
+					<form class="form-horizontal">
+						<div class="form-group">
+							<label for="serializerOid" class="control-label">Serializer</label>
+							<div class="controls">
+								<select id="serializerOid" name="serializerOid" class="revisionsdownloadcheckoutselect form-control">
+								</select>
+							</div>
+						</div>
+						<div class="form-group">
+							<div class="controls">
+								<label class="checkbox">
+									<input type="checkbox" class="downloadCheckoutZip" name="zip"> Zip
+								</label>
+							</div>
+						</div>
+					</form>
+				</div>
+			</div>
+		  	<div class="modal-footer">
+				<a class="btn btnClose btn-default" style="margin-right: 8px" data-dismiss="modal">Close</a>
+				<div class="btn-group" style="float: right">
+					<button class="btn downloadButton btn-primary">Download</button>
+					<button class="btn dropdown-toggle btn-primary" data-toggle="dropdown">
+			  			<span class="caret"></span>
+					</button>
+					<ul class="dropdown-menu">
+						<li><a class="checkoutButton">Checkout</a></li>
+						<li><a class="downloadTextButton">Download as Text</a></li>
+					</ul>
+				</div>
+		    </div>
+		</div>
+	</div>
+</div>
+<script>
+function Download(containerDiv, data) {
+	var othis = this;
+	othis.userHasCheckinRights = false;
+	othis.data = data;
+	othis.mimeTypeOverride = null;
+	othis.laid;
+	othis.zip = false;
+	
+	// Make sure we don't process the "Done preparing" message more than once
+	othis.prepareReceived = false;
+
+	Global.bimServerApi.resolveUser(function(user){
+		var requests = [];
+		requests.push([
+			"PluginInterface", "getDefaultSerializer", {}
+		]);
+		requests.push([
+			"PluginInterface", "getAllSerializersForRoids", {roids: data.roids == null ? [data.roid] : data.roids, onlyEnabled: true}
+		]);
+		if (data.downloadType != "downloadRevisions") {
+			requests.push([
+				"ServiceInterface", "userHasCheckinRights", {uoid: user.oid, poid: data.poid}
+			]);
+		}
+		Global.bimServerApi.multiCall(requests, function(data){
+			var defaultSerializer = data[0].result;
+			var serializers = data[1].result;
+			if (data.length > 2) {
+				othis.userHasCheckinRights = data[2].result;
+			}
+			serializers.forEach(function(serializer){
+				var option = $("<option value=\"" + serializer.oid + "\">" + serializer.name + "</option>");
+				if (serializer.oid == defaultSerializer.oid) {
+					option.attr("selected", "selected");
+				}
+				containerDiv.find(".revisionsdownloadcheckoutselect").append(option);
+			});
+			othis.checkRevisionsCheckoutButton();
+		});
+	});
+	
+	this.checkRevisionsCheckoutButton = function(event) {
+		if (!othis.data.allowCheckouts) {
+			containerDiv.find(".checkoutButton").hide();
+			return;
+		}
+		var el = containerDiv.find(".revisionsdownloadcheckoutselect");
+		var val = el.val();
+		var text = el.find(":selected").text();
+		if ((text != "Ifc2x3" && text != "IfcXML") || !othis.userHasCheckinRights) {
+			containerDiv.find(".checkoutButton").hide();
+		} else {
+			containerDiv.find(".checkoutButton").show();
+		}
+		if (!othis.userHasCheckinRights) {
+			containerDiv.find(".checkoutMessage").html("Checkout unavailable because you have no rights on the project");
+		} else {
+			containerDiv.find(".checkoutMessage").html("");
+		}
+	};
+
+	this.progressHandler = function(topicId, state) {
+		if (topicId == othis.laid) {
+			var oldStage = othis.stage;
+			othis.stage = state.stage;
+			if (oldStage != state.stage) {
+				containerDiv.find(".progressBarHolder .downloadProgressBar").remove();
+				containerDiv.find(".progressBarHolder").append("<div class=\"downloadProgressBar progress\"><div class=\"progress-bar\"></div></div>");
+			}
+			if (state.progress == -1) {
+				containerDiv.find(".downloadProgressBar").addClass("progress-striped").addClass("active");
+				containerDiv.find(".downloadProgressBar .progress-bar").css("width", "100%");
+			} else {
+				containerDiv.find(".downloadProgressBar").removeClass("progress-striped").removeClass("active");
+				containerDiv.find(".downloadProgressBar .progress-bar").css("width", parseInt(state.progress) + "%");
+			}
+			if (state.errors != null && state.errors.length > 0) {
+				containerDiv.find(".downloadStatus").removeClass("alert-danger").removeClass("alert-info").html("").hide();
+				othis.afterDownload();
+				state.errors.map(function(error){
+					containerDiv.find(".message").addClass("alert-danger").append(error + "<br/>").show();
+				});
+			} else {
+				containerDiv.find(".downloadStatus").removeClass("alert-danger").addClass("alert-info").html(state.title).show();
+				if (state.title == "Done preparing") {
+					if (!othis.prepareReceived) {
+						othis.prepareReceived = true;
+						if (state.warnings.length > 0) {
+							state.warnings.map(function(warning){
+								containerDiv.find(".message").addClass("alert-danger").append(warning + "<br/>").show();
+							});
+						}
+						if (state.errors != null && state.errors.length > 0) {
+							containerDiv.find(".progressBarHolder .downloadProgressBar").remove();
+	
+							othis.prepareReceived = false;
+							othis.laid = null;
+							
+							state.errors.map(function(error){
+								containerDiv.find(".message").addClass("alert-danger").append(error + "<br/>").show();
+							});
+						} else {
+							// Waiting for the callback, because changing the window.location will cancel all running ajax calls
+							var url = Global.bimServerApi.generateRevisionDownloadUrl({
+								topicId: topicId,
+								zip: containerDiv.find(".downloadCheckoutZip").is(":checked"),
+								serializerOid: containerDiv.find(".revisionsdownloadcheckoutselect").val(),
+								laid: othis.laid
+							});
+							
+							if (othis.mimeTypeOverride != null) {
+								url += "&mime=" + othis.mimeTypeOverride;
+								window.open(url);
+							} else {
+								window.location = url;
+							}
+							containerDiv.find(".checkoutMessage").html("");
+						}
+					}
+				} else if (state.state == "FINISHED") {
+					Global.bimServerApi.unregisterProgressHandler(othis.laid, othis.progressHandler, function(){
+						containerDiv.find(".progressBarHolder .downloadProgressBar").remove();
+						containerDiv.find(".downloadStatus").removeClass("alert-info").addClass("alert-success").html("Download complete.");
+						containerDiv.find(".fields, .downloadpopup .checkoutMessage").show();
+						containerDiv.find(".modal-footer .btn-group").show();
+						
+						// Setting laid to null to make sure that cancelling at this moment won't try to termintate something that's already done					
+						othis.laid = null;
+						othis.prepareReceived = false;
+					});				
+				}
+			}
+		}
+	};
+	
+	this.cancel = function(){
+		if (othis.laid != null) {
+			Global.bimServerApi.call("Bimsie1ServiceInterface", "terminateLongRunningAction", {actionId: othis.laid}, function(){
+			});
+		}
+	};
+	
+	this.afterDownload = function(){
+		containerDiv.find(".fields, .downloadpopup .checkoutMessage").show();
+		containerDiv.find(".downloadProgressBar").hide();
+		Global.bimServerApi.unregisterProgressHandler(othis.laid, othis.progressHandler, function(){
+			othis.prepareReceived = false;
+			othis.laid = null;
+		});
+		
+		containerDiv.find(".modal-footer .btn-group").show();
+	};
+	
+	this.start = function(data) {
+		containerDiv.find(".downloadStatus").addClass("alert-info").removeClass("alert-danger").show().html("Preparing download...");
+		
+		containerDiv.find(".progressBarHolder .downloadProgressBar").remove();
+		containerDiv.find(".progressBarHolder").append("<div class=\"downloadProgressBar progress\"><div class=\"progress-bar\"></div></div>");
+		
+		containerDiv.find(".fields").hide();
+		containerDiv.find(".checkoutMessage").hide();
+		containerDiv.find(".modal-footer .btn-group").hide();
+		containerDiv.find(".message").html("").hide();
+
+		function afterRegistration(topicId) {
+			Global.bimServerApi.call("Bimsie1NotificationRegistryInterface", "getProgress", {
+				topicId: othis.laid
+			}, function(state){
+				othis.progressHandler(othis.laid, state);
+			});
+		}
+		
+		if (data.downloadType == "query") {
+			Global.bimServerApi.call("Bimsie1ServiceInterface", "downloadQuery", data, function(data){
+				containerDiv.find(".downloadStatus").html("Preparing download...");
+				othis.laid = parseInt(data);
+				Global.bimServerApi.registerProgressHandler(othis.laid, othis.progressHandler, afterRegistration);
+			}, function(){
+				othis.afterDownload();
+				containerDiv.find(".downloadStatus").addClass("alert-danger").html(exception.message);
+			});
+		} else if (data.downloadType == "checkout") {
+			Global.bimServerApi.call("Bimsie1ServiceInterface", "checkout", data, function(data){
+				containerDiv.find(".downloadStatus").html("Preparing checkout...");
+				othis.laid = parseInt(data);
+				Global.bimServerApi.registerProgressHandler(othis.laid, othis.progressHandler, afterRegistration);
+			}, function(){
+				othis.afterDownload();
+				containerDiv.find(".downloadStatus").addClass("alert-danger").html(exception.message);
+			});
+		} else if (data.downloadType == "downloadRevisions") {
+			Global.bimServerApi.call("Bimsie1ServiceInterface", "downloadRevisions", data, function(data){
+				containerDiv.find(".downloadStatus").html("Preparing download...");
+				othis.laid = parseInt(data);
+				Global.bimServerApi.registerProgressHandler(othis.laid, othis.progressHandler, afterRegistration);
+			}, function(exception){
+				othis.afterDownload();
+				containerDiv.find(".downloadStatus").addClass("alert-danger").html(exception.message);
+			});
+		} else {
+			Global.bimServerApi.call("Bimsie1ServiceInterface", "download", data, function(data){
+				containerDiv.find(".downloadStatus").html("Preparing download...");
+				othis.laid = parseInt(data);
+				Global.bimServerApi.registerProgressHandler(othis.laid, othis.progressHandler, afterRegistration);
+			}, function(){
+				othis.afterDownload();
+				containerDiv.find(".downloadStatus").addClass("alert-danger").html(exception.message);
+			});
+		}
+	};
+
+	this.initCheckout = function(event) {
+		event.preventDefault();
+		othis.data.serializerOid = containerDiv.find(".revisionsdownloadcheckoutselect").val();
+		othis.data.showOwn = true;
+		othis.data.sync = false;
+		othis.data.zip = containerDiv.find(".downloadCheckoutZip").is(":checked");
+		othis.mimeTypeOverride = null;
+		othis.data.downloadType = "checkout";
+		othis.start(data);
+	};
+
+	this.initDownload = function(event) {
+		event.preventDefault();
+		if (containerDiv.find(".revisionsdownloadcheckoutselect").val() == null) {
+			containerDiv.find(".downloadStatus").addClass("alert-danger").html("Select a serializer").show();
+		} else {
+			othis.data.serializerOid = containerDiv.find(".revisionsdownloadcheckoutselect").val();
+			othis.data.showOwn = true;
+			othis.data.sync = false;
+			othis.data.zip = containerDiv.find(".downloadCheckoutZip").is(":checked");
+			othis.mimeTypeOverride = null;
+			othis.start(data);
+		}
+	};
+
+	this.initTextDownload = function(event) {
+		event.preventDefault();
+		othis.data.showOwn = true;
+		othis.data.sync = false;
+		othis.data.zip = containerDiv.find(".downloadCheckoutZip").is(":checked");
+		othis.data.serializerOid = containerDiv.find(".revisionsdownloadcheckoutselect").val();
+		othis.mimeTypeOverride = "text/plain";
+		othis.start(data);
+	};
+
+	containerDiv.find(".revisionsdownloadcheckoutselect").change(othis.checkRevisionsCheckoutButton);
+	containerDiv.find(".downloadButton").click(othis.initDownload);
+	containerDiv.find(".downloadTextButton").click(othis.initTextDownload);
+	containerDiv.find(".checkoutButton").click(othis.initCheckout);
+	containerDiv.find(".btnClose").click(othis.cancel);
+
+	containerDiv.find(".downloadCheckoutZip").change(function(){
+		if ($(this).is(":checked")) {
+			containerDiv.find(".downloadTextButton").button("disable");
+		} else {
+			containerDiv.find(".downloadTextButton").button("enable");
+		}	
+	});
+	
+	containerDiv.find("input[type=\"button\"]").button();
+}
+</script>

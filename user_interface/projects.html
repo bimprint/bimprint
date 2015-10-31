@@ -1,0 +1,137 @@
+<div class="projects">
+	<div class="well well-sm noprojects">There are no projects yet, click on Project | New project to create a new project</div>
+	<table class="projectsTable table table-hover initialhide">
+		<thead>
+			<tr>
+				<th>Name</th>
+				<th>Sub Projects</th>
+				<th>Revisions</th>
+				<th>Actions</th>
+			</tr>
+		</thead>
+		<tbody>
+		</tbody>
+	</table>
+</div>
+<script>
+function Projects(containerDiv, main) {
+	var othis = this;
+	
+	this.projectClick = function(event) {
+		if (!$(event.target).is("a, button, span.caret")) {
+			main.showProject($(this).parents("tr").andSelf().data("project").oid, null, true);
+			othis.close();
+		}
+	};
+
+	this.close = function() {
+		Global.bimServerApi.unregisterNewProjectHandler(othis.newProjectHandler);
+	};
+
+	this.show = function() {
+		Global.bimServerApi.registerNewProjectHandler(othis.newProjectHandler);
+	};
+	
+	this.deleteProject = function(project){
+		Global.bimServerApi.callWithFullIndication("Bimsie1ServiceInterface", "deleteProject", {poid: project.oid}, function(){
+			othis.loadProjects();
+		});
+	};
+
+	this.undeleteProject = function(project){
+		Global.bimServerApi.callWithFullIndication("Bimsie1ServiceInterface", "undeleteProject", {poid: project.oid}, function(){
+			othis.loadProjects();
+		});
+	};
+	
+	this.addProject = function(project) {
+		$(".projects .projectsTable").show();
+		$(".projects .noprojects").hide();
+		var projectRow = $("<tr>");
+		projectRow.attr("poid", project.oid);
+		projectRow.data("project", project);
+		projectRow.click(othis.projectClick);
+
+		var indent = 0;
+		
+		if (project.parentId != -1 && project.parentId != null) {
+			var parentRow = $(".projectsTable [poid=" + project.parentId + "]");
+			if (parentRow.length > 0) {
+				indent = parseInt(parentRow.attr("indent")) + 1;
+			}
+		}
+		
+		projectRow.attr("indent", indent);
+
+		var add = "";
+		for (var i=0; i<indent; i++) {
+			add += "&nbsp;&nbsp;&nbsp;&nbsp;";
+		}
+		if (indent == 0) {
+			add += "<b>" + project.name + "</b>";
+		} else {
+			add += project.name;
+		}
+		projectRow.append("<td>" + add + "</td>");
+
+		projectRow.append("<td>" + project.nrSubProjects+ "</td>");
+		projectRow.append("<td>" + project.nrRevisions + "</td>");
+		var actions = newDropdownTd("Actions");
+
+		actions.find(".dropdown-toggle").click(function(){
+			actions.find("ul li").remove();
+			var project = $(this).parents("tr").data("project");
+			if (project.state == "ACTIVE") {
+				var li = $("<li><a>Delete</a></li>");
+				li.find("a").click(function(){othis.deleteProject(project)});
+				actions.find("ul").append(li);
+			} else {
+				var li = $("<li><a>Undelete</a></li>");
+				li.find("a").click(function(){othis.undeleteProject(project)});
+				actions.find("ul").append(li);
+			}
+		});
+
+		if (project.hasCheckinRights) {
+			projectRow.addClass("success");
+		} else {
+			projectRow.addClass("warning");
+		}
+		
+		projectRow.append(actions);
+
+		$(".projectsTable").append(projectRow);
+		
+		if ($.cookie(main.user.oid + "showdeleteditems") != "true" && project.state == "DELETED") {
+			projectRow.hide();
+		}
+	};
+	
+	this.loadProjects = function(){
+		Global.bimServerApi.callWithNoIndication("SettingsInterface", "isAllowUsersToCreateTopLevelProjects", {}, function(enabled){
+			if (main.user.userType == "ADMIN" || enabled) {
+				$(".buttonBar").show();
+				$(".addProjectButton").show();
+			}
+		});
+		
+		$(".projectsTable tbody tr").remove();
+		Global.bimServerApi.callWithNoIndication("Bimsie1ServiceInterface", "getAllProjectsSmall", {}, function(data){
+			data.forEach(function(project){
+				$(".projectsTable").show();
+				othis.addProject(project);
+			});
+		});
+	};
+	
+	this.newProjectHandler = function(poid){
+		Global.bimServerApi.callWithNoIndication("Bimsie1ServiceInterface", "getProjectByPoid", {poid: poid}, function(data){
+			othis.addProject(data);
+		});
+	};
+	
+	$(".addProjectButton").click(function(){main.showAddProject()});
+
+	othis.loadProjects();
+}
+</script>

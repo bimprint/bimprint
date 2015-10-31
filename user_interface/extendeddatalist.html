@@ -1,0 +1,135 @@
+<div class="extendeddatalist">
+	<a class="ih backButton">back</a>
+	<div class="details"></div>
+	<div class="list">
+		<div class="well well-sm noextendeddata">
+			No extended data
+		</div>
+		<table class="table initialhide table-striped table-hover">
+			<thead>
+				<tr>
+					<th>Title</th>
+					<th>Added</th>
+					<th>User</th>
+					<th>Schema</th>
+					<th>Size</th>
+					<th>Actions</th>
+				</tr>
+			</thead>
+			<tbody>
+			</tbody>
+		</table>
+	</div>
+</div>
+<script>
+function ExtendedDataList(main, revision, parent) {
+	var othis = this;
+	othis.revision = revision;
+
+	this.userClick = function(event){
+		if (!$(event.target).is("a, button, span.caret")) {
+			main.showUser($(this).data("user"), event);
+			othis.close();
+		}
+	};
+	
+	this.extendedDataClick = function(event) {
+		if (!$(event.target).is("a, button, span.caret")) {
+			event.preventDefault();
+			var extendedData = $(this).parents("tr").andSelf().data("extendeddata");
+			$(".extendeddatalist .backButton").show();
+			$(".extendeddatalist .list").hide();
+			$(".extendeddatalist .details").show();
+			$(".extendeddatalist .details").load(Global.baseDir + "extendeddata.html", function(){
+				new ExtendedData(main, extendedData, parent);
+			});
+		}
+	};
+	
+	this.newLogAction = function(uuid, logAction, serviceIdentifier, profileIdentifier, token, apiUrl){
+		if (logAction.__type == "SExtendedDataAddedToRevision") {
+			Global.bimServerApi.call("Bimsie1ServiceInterface", "getExtendedData", {oid: logAction.extendedDataId}, function(data){
+				othis.addExtendedData(data);
+			});
+		}
+	};
+	
+	this.addExtendedData = function(extendedData) {
+		$(".extendeddatalist table").show();
+		$(".extendeddatalist .noextendeddata").hide();
+		var tr = $("<tr>");
+		tr.click(othis.extendedDataClick);
+		tr.data("extendeddata", extendedData);
+		
+		tr.append("<td>" + extendedData.title + "</td>");
+		
+		tr.append("<td><span title=\"" + formatDateTime(new Date(extendedData.added)) + "\" class=\"timespan\" datetime=\"" + extendedData.added + "\">" + formatTimeSpan(new Date().getTime() - extendedData.added, false) + "</span></td>");
+		
+		var userTd = $("<td></td>");
+		var userA = $("<a>loading...</a>");
+		userA.attr("uoid", extendedData.userId);
+		userA.click(othis.userClick);
+		userTd.append(userA);
+		loadUser(userA);
+		tr.append(userTd);
+		
+		var schemaTd = $("<td>");
+		schemaTd.append(main.makeSchemaLink(extendedData.schemaId));
+		tr.append(schemaTd);
+		tr.append("<td>" + getHumanSize(extendedData.size) + "</td>");
+		
+		var actions = newSplitDropDownTd("Download", othis.download);
+		actions.find("button.dropdown-toggle").click(function(){
+			Global.bimServerApi.call("ServiceInterface", "getAllServicesOfProject", {poid: othis.revision.projectId}, function(data){
+				actions.find("ul li").remove();
+				var added = 0;
+				data.forEach(function(service){
+					if (service.trigger == "NEW_EXTENDED_DATA") {
+						var li = $("<li><a>Run \"" + service.name + "\"</a></li>");
+						added++;
+						li.find("a").click(function(event){
+							Global.bimServerApi.call("ServiceInterface", "triggerNewExtendedData", {edid: extendedData.oid, soid: service.oid}, function(data){
+							});
+						});
+						actions.find("ul").append(li);
+					}
+				});
+				if (added == 0) {
+					var li = $("<li><a>No services configured</a></li>");
+					actions.find("ul").append(li);
+				}
+			});
+		});
+		tr.append(actions);
+
+		$(".extendeddatalist table tbody").prepend(tr);
+	};
+	
+	this.download = function(event) {
+		var extendedData = $(this).parents("tr").data("extendeddata");
+		document.location = Global.bimServerApi.generateExtendedDataDownloadUrl(extendedData.oid);
+	};
+	
+	this.loadExtendedData = function() {
+		Global.bimServerApi.call("Bimsie1ServiceInterface", "getAllExtendedDataOfRevision", {roid: revision.oid}, function(data){
+			$(".extendeddatalist table tbody").empty();
+			data.forEach(function(extendedData){
+				othis.addExtendedData(extendedData);
+			});
+		});
+	};
+	
+	this.close = function(){
+		Global.bimServerApi.unregister(othis.newLogAction);
+	};
+	
+	$(".extendeddatalist .backButton").click(function(){
+		$(".extendeddatalist .list").show();
+		$(".extendeddatalist .details").hide();
+		$(".extendeddatalist .backButton").hide();
+	});
+	Global.bimServerApi.register("NotificationInterface", "newLogAction", othis.newLogAction);
+	
+	othis.loadExtendedData();
+}
+</script>

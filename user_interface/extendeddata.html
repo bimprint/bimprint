@@ -1,0 +1,136 @@
+<div class="extendeddata">
+	<table class="table detailsTable">
+		<thead></thead>
+		<tbody></tbody>
+	</table>
+	<div class="bcf">
+		<img/>
+	</div>
+	<div class="validationreport ih">
+		<h2></h2>
+		<table class="table">
+			<thead>
+				<tr>
+					<th></th>
+					<th>Identifier</th>
+					<th>Value</th>
+					<th>Should be</th>
+				</tr>
+			</thead>
+			<tbody></tbody>
+		</table>
+	</div>
+	<div class="csv ih">
+		<h2></h2>
+		<table class="table">
+			<thead></thead>
+			<tbody></tbody>
+		</table>
+	</div>
+	<div class="html ih">
+		<h2></h2>
+		<div class="content"></div>
+	</div>
+</div>
+<script>
+function ExtendedData(main, extendedData, parent) {
+	var othis = this;
+
+	var tr = $("<tr><td>User</td></tr>");
+	
+	tr.append($("<td>").append(createUserLink(main, extendedData.userId)));
+	
+	$(".extendeddata table.detailsTable tbody").append("<tr><td>Title</td><td>" + extendedData.title + "</td></tr>");
+	$(".extendeddata table.detailsTable tbody").append(tr);
+
+	var schemaTd = $("<td>");
+	schemaTd.append(main.makeSchemaLink(extendedData.schemaId));
+
+	var tr = $("<tr><td>Schema</td></tr>");
+	tr.append(schemaTd);
+	$(".extendeddata table.detailsTable tbody").append(tr);
+	$(".extendeddata table.detailsTable tbody").append("<tr><td>Size</td><td class=\"size\"></td></tr>");
+	var downloadLink = $("<a>Download</a>");
+	var td = $("<td>");
+	td.append(downloadLink);
+	downloadLink.click(function(){
+		document.location = Global.bimServerApi.generateExtendedDataDownloadUrl(extendedData.oid);
+	});
+	tr = $("<tr>");
+	tr.append("<td>Download</td>");
+	tr.append(td);
+	$(".extendeddata table.detailsTable tbody").append(tr);
+	$(".extendeddata table.detailsTable tbody").append("<tr><td>Added</td><td>" + formatDateTime(new Date(extendedData.added)) + "</td></tr>");
+
+	this.showBcf = function(schema, extendedData, file){
+		$(".bcf img").attr("src", "https://github.com/BuildingSMART/BCF/raw/master/Icons/BCFicon128.png?raw=true");
+	};
+
+	this.objectClick = function(){
+		var oid = $(this).data("oid");
+		parent.loadBrowser(function(){
+			this.loadObject(oid);
+		}, true);
+	};
+
+	this.showValidationReport = function(schema, extendedData, data){
+		$(".validationreport h2").html(extendedData.title);
+		var json = JSON.parse(data);
+		json.items.forEach(function(item){
+			if (item.type == "header") {
+				var tr = $("<tr><td></td><td colspan=\"3\" class=\"header\">" + item.text + "</td></tr>");
+				$(".validationreport table tbody").append(tr);
+			} else if (item.type == "line") {
+				var tr = $("<tr></tr>");
+				tr.append("<td><img/></td>");
+				if (item.oid != null && item.oid != -1) {
+					tr.append("<td><a>" + item.identification + "</a></td>");
+					tr.find("a").data("oid", item.oid);
+					tr.find("a").click(othis.objectClick);
+				} else {
+					tr.append("<td>" + item.identification + "</td>");
+				}
+				tr.append("<td>" + item.value + "</td>");
+				tr.append("<td>" + item.shouldBe + "</td>");
+				tr.find("img").attr("src", item.status == "ERROR" ? "img/exclamation.png" : "img/accept.png");
+				$(".validationreport table tbody").append(tr);
+			}
+		});
+	};
+
+	this.showHtml = function(schema, extendedData, data){
+		$(".html h2").html(extendedData.title + " (HTML)");
+		$(".html .content").html(data);
+		$(".html").show();
+	}
+	
+	this.showCsv = function(schema, extendedData, data){
+		$(".csv h2").html(extendedData.title + " (CSV)");
+		var json = Papa.parse(data);
+		json.data.forEach(function(row){
+			var tr = $("<tr>");
+			row.forEach(function(val){
+				tr.append("<td>" + val + "</td>");
+			});
+			$(".csv table tbody").append(tr);
+		});
+		$(".csv").show();
+	};
+	
+	Global.bimServerApi.call("ServiceInterface", "getFile", {fileId: extendedData.fileId}, function(file){
+		var data = UTF8ArrToStr(base64DecToArr(file.data));
+		$(".size").html(GetHumanSize(data.length));
+		Global.bimServerApi.call("Bimsie1ServiceInterface", "getExtendedDataSchemaById", {oid: extendedData.schemaId}, function(schema){
+			if (file.mime == "text/csv") {
+				othis.showCsv(schema, extendedData, data);
+			} else if (file.mime == "text/html") {
+				othis.showHtml(schema, extendedData, data);
+			} else if (schema.namespace == "http://extend.bimserver.org/validationreport") {
+				othis.showValidationReport(schema, extendedData, data);
+			} else if (schema.namespace == "http://www.buildingsmart-tech.org/specifications/bcf-releases") {
+				othis.showBcf(schema, extendedData, data);
+			}
+		});
+	});
+}
+</script>

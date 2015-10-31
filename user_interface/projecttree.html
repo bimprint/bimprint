@@ -1,0 +1,524 @@
+<div class="projecttree">
+	<div class="dropdown">
+		<ul id="dropdown" class="dropdown-menu treeDropDown" role="menu">
+			<li class="dropdown-submenu revisionsLi">
+				<a>Revisions</a>
+				<ul class="revisions dropdown-menu"></ul>
+			</li>
+		</ul>
+	</div>
+	<div class="tree">
+	</div>
+</div>
+<script>
+function ProjectTree(containerDiv, parent, options, selectedId) {
+	var othis = this;
+	othis.selectedId = selectedId;
+	othis.selectedNode = null;
+
+	this.load = function(){
+		var promise = new window.BimServerApiPromise();
+		othis.tree = new Tree(containerDiv.find(".tree"));
+		othis.tree.selectionListeners.push(function(node){
+			parent.selectedObjectId = node.id;
+		});
+		var lastParent = -1;
+		var nrSubprojects = 0;
+		promise.fire();
+		return promise;
+	};
+
+	this.addRevision = function(project, roid, types){
+		var parentNode = othis.tree.find(project.parentId);
+		if (parentNode == null) {
+			parentNode = othis.tree.find(-1);
+		}
+		var node = Object.create(Node.prototype);
+		node.init(project.oid, project.name);
+		parentNode.add(node);
+		var dropdown = othis.createDropDown(node);
+		var eye = othis.createEye(node, 2);
+		eye.toggle(parent.threeDAspectVisible.get());
+		if (roid == -1 || project.lastRevisionId == -1) {
+			eye.hide();
+		}
+		node.click(function(){
+			node.select();
+			Global.bimServerApi.call("Bimsie1ServiceInterface", "getProjectByPoid", {poid: node.project.oid}, function(project){
+				parent.loadDetails(project);
+			});
+		});
+		
+		var history = History.getState().data;
+		if (othis.project != null && (history.poid == project.oid || othis.project.oid == project.oid)) {
+			node.select();
+		}
+		
+		node.setIcon("folder");
+		node.type = "Project";
+		node.project = project;
+		node.groupId = roid;
+		node.roid = roid;
+		node.sort = true;
+		node.poid = project.oid;
+		node.hint("Project");
+		
+		//		if (main != null && main.user != null && ($.cookie(main.user.oid + "showdeleteditems") != "true" && project.state == "DELETED"))
+		if (options != null && options.hideDeleted == true && project.state == "DELETED") {
+			node.hide();
+		}
+		if (project.nrSubProjects == 0 || (project.subProjects != null && project.subProjects.length == 0)) {
+			if (roid != -1) {
+				node.onLoad(function(){
+					console.time("projectTreeLoad");
+					var promise = othis.loadProjectTree(project, roid, node, types);
+					promise.done(function(){
+						console.timeEnd("projectTreeLoad");
+					});
+					return promise;
+				});
+			}
+		} else {
+			node.doneLoading();
+			node.open();
+		}
+	};
+	
+	this.setShowEyes = function(show) {
+		containerDiv.find(".eye").each(function(index, eye){
+			if (!show) {
+				$(eye).hide();
+			} else {
+				var node = $(eye).data("node");
+				if (node.project != null) {
+					if (node.project.lastRevisionId != -1) {
+						$(eye).show();
+					}
+				}
+			}
+		});
+	};
+	
+	this.loadRevision = function(project, roid, types) {
+		var promise = new window.BimServerApiPromise();
+		var node = othis.tree.find(project.oid);
+		
+		if (project.nrSubProjects == 0) {
+//			promise.chain(node.open());
+		} else {
+			node.doneLoading();
+			promise.chain(node.open());
+		}
+		if (options != null && options.hideDeleted == true && project.state == "DELETED") {
+			node.hide();
+		}
+		return promise;
+	};
+	
+	this.unloadRevision = function(poid, roid) {
+		var node = othis.tree.find(poid);
+		if (node != null) {
+			node.remove();
+		}
+	};
+	
+	this.close = function(){};
+
+	this.toggleDropDown = function(node){
+		othis.selectedNode = node;
+		
+		var thisElement = $(this);
+		
+		Global.bimServerApi.call("Bimsie1ServiceInterface", "getAllRevisionsOfProject", {poid: othis.selectedNode.poid}, function(revisions){
+			dropdown.find(".revisions li").remove();
+			if (revisions.length == 0) {
+				dropdown.find(".btnDownload").hide();
+				$(".revisionsLi").hide();
+			} else {
+				dropdown.find(".btnDownload").show();
+				$(".revisionsLi").show();
+				revisions.forEach(function(revision){
+					var li = $("<li><a>" + revision.id + " (" + revision.comment + ")</a></li>");
+					li.find("a").attr("poid", othis.selectedNode.poid);
+					li.find("a").attr("roid", revision.oid);
+					li.find("a").data("project", othis.selectedNode.project);
+					if (othis.selectedNode.roid == revision.oid) {
+						li.find("a").css("font-weight", "bold");
+					}
+					li.find("a").click(function(){
+						dropdown.hide();
+						var a = $(this);
+						parent.changeRevision(a.data("project"), a.attr("roid"));
+					});
+					dropdown.find(".revisions").append(li);
+				});
+			}
+			containerDiv.find(".treeDropDown").dropdown("toggle");
+			dropdown.show();
+			containerDiv.find(".dropdown").offset({top: thisElement.offset().top + 20, left: thisElement.offset().left - 120});
+		});
+	};
+	
+	this.createDropDown = function(node){
+		var dropdown = $("<a>");
+		dropdown.addClass("tree-dropdown");
+		dropdown.attr("data-toggle", "dropdown");
+		dropdown.attr("title", "New project");
+		dropdown.attr("data-html", "<p>To <span class=\"underline\">checkin a revision</span> or <span class=\"underline\">add subprojects</span> click on the triangle <img src=\"../img/dropdown.png\"/> or use the project menu in the top-left corner</p>");
+		dropdown.attr("data-target", "#dropdown");
+		dropdown.click(function(){
+			othis.toggleDropDown.call(this, node);
+		});
+		node.addButton(dropdown);
+		return dropdown;
+	};
+	
+	this.hide = function(){
+		containerDiv.hide();
+	};
+	
+	this.show = function(){
+		containerDiv.show();
+		if (othis.selectedId != -1) {
+			var node = othis.tree.find(othis.selectedId);
+			if (node != null) {
+				$(".sidespanWrapper").scrollTo(node.li);
+			}
+		}
+	};
+
+	this.select = function(origin, id){
+		var treeNode = othis.tree.find(id);
+		if (treeNode != null) {
+			treeNode.openRecursive();
+			treeNode.select();
+
+			if (origin != othis) {
+				// Somehow scrollTo messes up the selection of the selected object in WebGL, probably some browser drawing issue
+				setTimeout(function(){
+					$(".sidespanWrapper").scrollTo(treeNode.li);
+				}, 1);
+			}
+			return true;
+		} else {
+			return false;
+		}
+	};
+	
+	this.selected = function(origin, groupId, id){
+		if (othis.selectedId == id) {
+			return;
+		}
+		othis.selectedId = id;
+		othis.select(id);
+		var treeNode = othis.tree.find(id);
+		if (othis.select(origin, id)) {
+			
+		} else {
+			// Maybe this object has not yet been loaded in the tree, but is available in the model
+			var model = parent.models[groupId];
+			model.get(id, function(object){
+				// Now we will have to see to which parent structure this object belongs...
+				object.getContainedInStructure(function(struc){
+					struc.getRelatingStructure(function(relatingStructure){
+						if (relatingStructure.getType() == "IfcBuildingStorey") {
+							var buildingStructureNode = othis.tree.find(relatingStructure.oid);
+							if (buildingStructureNode == null) {
+								console.log("IfcBuildingStorey not found in tree");
+							} else {
+								othis.loadBuildingStorey(buildingStructureNode, relatingStructure, []).done(function(){
+									if (!othis.select(origin, id)) {
+										console.log("Still not found");
+									}
+								});
+							}
+						}
+					});
+				});
+			});
+		}
+	};
+
+	this.unselected = function(groupId, id){
+		var treeNode = othis.tree.find(id);
+		if (treeNode != null) {
+			treeNode.unselect();
+		}				
+	};
+	
+	this.objectVisibilityChanged = function(objects, oldMode){
+		//todo use groupid
+		objects.forEach(function(object){
+			var node = othis.tree.find(object.oid);
+			if (node != null) {
+				var mode = object.trans.mode;
+				node.eye.attr("mode", mode);
+				if (mode == 0) {
+					node.eye.removeClass("eyeclosed").removeClass("eyehalfopen").addClass("eyeopen");
+				} else if (mode == 1) {
+					node.eye.removeClass("eyeopen").removeClass("eyeclosed").addClass("eyehalfopen");
+				} else if (mode == 2) {
+					node.eye.removeClass("eyehalfopen").removeClass("eyeopen").addClass("eyeclosed");
+				}
+			}
+		});
+	};
+	
+	this.treeItemClick = function(treeNode) {
+		console.log("CLICKED", treeNode);
+		if(treeNode.type=='IfcWindow'){
+			window.open("http://bimprint.com/svg.php?id="+treeNode.title, treeNode.title);
+		}
+		if (typeof treeNode.id === "number" && treeNode.type.startsWith("Ifc")) {
+			var groupNode = treeNode.findFirstParentWithAttr("groupId");
+			parent.selected(othis, groupNode.groupId, treeNode.id);
+		}
+	};
+
+	this.toggleEye = function(node, mode){
+		setTimeout(function(){
+			node.loadRecursively().done(function(){
+				var projectNodes = node.listFilterByType("Project");
+				if (projectNodes.length == 0) {
+					othis.internalToggleEye(node, mode);
+				} else {
+					projectNodes.forEach(function(projectNode){
+						if (projectNode.roid != -1) {
+							if (!parent.models[projectNode.roid].isPreloaded) {
+								othis.loadRevision(projectNode.project, projectNode.roid, []).done(function(){
+									othis.internalToggleEye(projectNode, mode);
+								});
+							} else {
+								othis.internalToggleEye(projectNode, mode);
+							}
+						}
+					});
+				}
+			});
+		}, 50);
+	};
+	
+	this.internalToggleEye = function(node, mode) {
+		var nodeList = node.list();
+		var groupNode = node.findFirstParentWithAttr("groupId");
+		if (groupNode.groupId != -1) {
+			var hiddenTypes = Settings.getDefaultHiddenTypes();
+			var ifcOids = [];
+			nodeList.forEach(function(subNode){
+				if (subNode.type.startsWith("Ifc") && typeof subNode.id === "number") {
+					var explicit = node.id == subNode.id || (node.type != null && node.type == subNode.type);
+					if (hiddenTypes[subNode.type] == null || explicit || mode != 0) {
+						ifcOids.push(subNode.id);
+					}
+				}
+			});
+			parent.setObjectVisibility(groupNode.groupId, ifcOids, mode);
+			nodeList.forEach(function(n){
+				var explicit = node.id == n.id || (node.type != null && node.type == n.type);
+				if (hiddenTypes[n.type] == null || explicit || mode != 0) {
+					n.eye.attr("mode", mode);
+					if (mode == 0) {
+						n.eye.removeClass("eyeclosed").removeClass("eyehalfopen").addClass("eyeopen");
+					} else if (mode == 1) {
+						n.eye.removeClass("eyeopen").removeClass("eyeclosed").addClass("eyehalfopen");
+					} else if (mode == 2) {
+						n.eye.removeClass("eyehalfopen").removeClass("eyeopen").addClass("eyeclosed");
+					}
+				}
+			});
+		}
+	};
+	
+	this.createEye = function(node, mode){
+		var eye = $("<div>");
+		eye.addClass("eye");
+		if (mode == 0) {
+			eye.addClass("eyeopen");
+		} else if (mode == 1) {
+			eye.addClass("eyehalfopen");
+		} else if (mode == 2) {
+			eye.addClass("eyeclosed");
+		}
+		eye.attr("mode", mode);
+		eye.click(function(){
+			var mode = parseInt(eye.attr("mode"));
+			othis.toggleEye(node, (mode + 1) % 3);
+		});
+		eye.toggle(parent.threeDAspectVisible.get());
+		eye.data("node", node);
+		node.eye = eye;
+		node.addButton(eye);
+		return eye;
+	};
+	
+	this.processRelatedElement = function(parentNode, relatedElement, createdTypes, types){
+		typeNode = createdTypes[relatedElement.getType()];
+		if (typeNode == null) {
+			var typeNode = Object.create(Node.prototype);
+			typeNode.init(relatedElement.getType(), stripIfc(relatedElement.getType()));
+
+			typeNode.setIcon("types");
+			typeNode.type = relatedElement.getType();
+			
+			if (types[relatedElement.getType()] == null) {
+				othis.createEye(typeNode, 2);
+			} else {
+				othis.createEye(typeNode, types[relatedElement.getType()].mode);
+			}
+			
+			createdTypes[relatedElement.getType()] = typeNode;
+			parentNode.add(typeNode);
+		}
+		othis.buildDecomposedTree(relatedElement, typeNode, types);
+	};
+	
+	this.loadBuildingStorey = function(newNode, object, types){
+		var promise = new window.BimServerApiPromise();
+		var createdTypes = {};
+		object.getContainsElements(function(relReferencedInSpatialStructure){
+			relReferencedInSpatialStructure.getRelatedElements(function(relatedElement){
+				othis.processRelatedElement(newNode, relatedElement, createdTypes, types);
+			}).done(function(){
+				object.getIsDecomposedBy(function(isDecomposedBy){
+					if (isDecomposedBy != null) {
+						isDecomposedBy.getRelatedObjects(function(relatedObject){
+							othis.processRelatedElement(newNode, relatedObject, createdTypes, types);
+						});
+					}
+				});
+			});
+		}).done(function(){
+			promise.fire();
+		});
+		return promise;
+	};
+	
+	this.buildDecomposedTree = function(object, tree, types) {
+		console.log("object",object)
+		var name = null;
+		if (object.getGlobalId != null) {
+			if (object.getGlobalId() != null && object.getGlobalId() != "") {
+				cuid = object.getGlobalId();
+				var G = new GUID(cuid);
+				name = G.toUncompressedString();
+			}
+		}
+		if (name == null) {
+			if (object.getName() != null && object.getName() != "") {
+				name = object.getName();
+			}
+		}
+		if (name == null) {
+			name = "Unknown";
+		}
+		var newNode = Object.create(Node.prototype);
+		newNode.init(object.oid, name);
+		
+		newNode.type = object.getType();
+		if (object.getType() == "IfcProject" || object.getType() == "IfcSite" || object.getType() == "IfcBuilding" || object.getType() == "IfcBuildingStorey" || object.getType() == "IfcSpace") {
+			newNode.setIcon("hierarchy");
+		} else {
+			newNode.setIcon("ball");
+		}
+		newNode.click(othis.treeItemClick);
+		newNode.hint(object.getType());
+		var state = types[object.getType()];
+		othis.createEye(newNode, state == null ? 2 : state.mode);
+		tree.add(newNode);
+		if (object.getType() == "IfcBuildingStorey") {
+			newNode.onLoad(function(){
+				var promise = new window.BimServerApiPromise();
+				setTimeout(function(){
+					othis.loadBuildingStorey(newNode, object, types).done(function(){
+						promise.fire();
+					});
+				}, 50);
+				return promise;
+			});
+		} else {
+			newNode.onLoad(function(){
+				var promise = new window.BimServerApiPromise();
+				setTimeout(function(){
+					object.getIsDecomposedBy(function(isDecomposedBy){
+						isDecomposedBy.getRelatedObjects(function(relatedObject){
+							othis.buildDecomposedTree(relatedObject, newNode, types);
+						});
+					}).done(function(){
+						if (object.getContainsElements != null) {
+							object.getContainsElements(function(containedElement){
+								containedElement.getRelatedElements(function(relatedElement){
+									othis.buildDecomposedTree(relatedElement, newNode, types);
+								});
+							});
+						}
+						promise.fire();
+					});
+				}, 50);
+				return promise;
+			});
+		}
+	}
+	
+	this.loadProjectTree = function(project, roid, node, types){
+		var promise = new window.BimServerApiPromise();
+		var model = parent.models[roid];
+		if (model != null) {
+			parent.preloadModel(project, roid).done(function(){
+				model.getAllOfType("IfcProject", false, function(project){
+					othis.buildDecomposedTree(project, node, types);
+				}).done(function(){
+					promise.fire();
+					node.li.append(node.ul);
+					node.doneLoading();
+				});
+			});
+		} else {
+			promise.fire();
+		}
+		return promise;
+	};
+	
+	this.gatherRoidList = function(node, list){
+		if (node.type == "Project") {
+			if (node.roid != -1) {
+				list.push(node.roid);
+			}
+			if (node.children) {
+				node.children.forEach(function(child){
+					othis.gatherRoidList(child, list);
+				});
+			}
+		}
+	};
+	
+	this.addMenuItem = function(title, click){
+		var li = $("<li></li>");
+		var a = $("<a>" + title + "</a>");
+		a.click(function(){
+			containerDiv.find(".dropdown").hide();
+			click();
+		});
+		li.append(a);
+		containerDiv.find(".treeDropDown").append(li);
+		return li;
+	};
+	
+	this.addMenuDivider = function(){
+		containerDiv.find(".treeDropDown").append("<li class=\"divider\"></li>");		
+	};
+	
+	parent.selectListeners.register(othis.selected);
+	parent.unselectListeners.register(othis.unselected);
+	parent.objectVisibilityListeners.register(othis.objectVisibilityChanged);
+	parent.modelAddedListeners.register(othis.addRevision);
+	parent.modelLoadedListeners.register(othis.loadRevision);
+	parent.modelUnloadedListeners.register(othis.unloadRevision);
+	parent.threeDAspectVisible.register(othis.setShowEyes);
+
+	var dropdown = containerDiv.find(".dropdown");
+	
+	$(window).click(function(){
+		dropdown.hide();
+	});
+}
+</script>

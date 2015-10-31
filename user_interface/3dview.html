@@ -1,0 +1,444 @@
+<div class="threedview">
+	<button class="ih btn btnScreenShot">Screenshot</button>
+	<img class="ih screenshot" style="width: 300px"/>
+	<div class="progressbars">
+		<div class="waiting">
+			<span class="badge">3</span><span class="text"> Waiting...</span>
+		</div>
+	</div>
+	<div class="panel panel-default visualization ih">
+		<div class="panel-heading">
+			<h3 class="panel-title">Visualization options</h3>
+		</div>
+		<div class="panel-body"></div>
+	</div>
+	<div id="viewport"></div>
+</div>
+<script>
+function ThreeDView(containerDiv, parent) {
+	var o = this;
+	o.selectedId = -1;
+	o.loadedOids = {};
+	
+	this.load = function(){
+		var promise = new window.BimServerApiPromise();
+		o.viewer = new BIMSURFER.Viewer(Global.bimServerApi, 'viewport');
+		$(window).resize(o.resize);
+		o.resize();
+		o.viewer.loadScene(function(){
+			var clickSelect = o.viewer.getControl("BIMSURFER.Control.ClickSelect");
+			clickSelect.activate();
+			clickSelect.events.register('select', o.nodeSelected);
+			clickSelect.events.register('unselect', o.nodeUnselected);
+			clickSelect.events.register('select', function(e){console.log("weeee",e)});
+			promise.fire();
+		}, {useCapture: true});
+		return promise;
+	};
+	
+	this.nodeSelected = function(groupId, node){
+
+		o.selectedId = node.id;
+		parent.selected(o, groupId, node.id);
+	};
+	
+	this.nodeUnselected = function(groupId, node){
+		parent.unselected(o, groupId, node.id);
+		o.selectedId = -1;
+	};
+	
+	this.selected = function(origin, groupId, id){
+		if (o.selectedId == id) {
+			return;
+		}
+		o.selectedId = id;
+		// todo use groupid		
+		var sceneJsNode = o.viewer.scene.findNode(id);
+		if (sceneJsNode != null) {
+			sceneJsNode.nodeId = sceneJsNode.id;
+			
+			o.viewer.getControl("BIMSURFER.Control.ClickSelect").pick(sceneJsNode);
+		}
+	};
+	
+	this.unselected = function(groupId, id){
+		
+	};
+	
+	this.setAlternativeColor = function(object, color){
+		o.updateVisibility(object);
+	};
+	
+	this.unsetAlternativeColor = function(object){
+		var threeDObject = o.viewer.scene.findNode(object.oid);
+		if (threeDObject != null) {
+			var matrix = threeDObject.nodes[0];
+			var geometryNode = matrix.nodes[0];
+			if (geometryNode.coreId != null && ("" + geometryNode.coreId).endsWith("_Visualization")) {
+				// This is a complex-material object which had been modified, return it to the old state
+				if (geometryNode._core.arrays.colors != null) {
+					matrix.removeNode(geometryNode);
+					
+					var newGeometry = {
+						type: "geometry",
+						coreId: geometryNode.getCoreId().replace("_Visualization", "")
+					}
+					
+					matrix.addNode(newGeometry);
+				}
+			} else {
+				o.setObjectColor(object);
+			}
+		}
+	};
+	
+	this.setObjectColor = function(object){
+		var threeDObject = o.viewer.scene.findNode(object.oid);
+		var mode = object.trans.mode;
+		if (threeDObject != null) {
+			var matrix = threeDObject.nodes[0];
+			var geometryNode = matrix.nodes[0];
+			var material = BIMSURFER.Constants.materials[object.getType()];
+			// Hack to get the roof to be red.....
+			if (object.getType() == "IfcSlab") {
+				if (object.getPredefinedType() == "ROOF") {
+					material = BIMSURFER.Constants.materials["IfcRoof"];
+				}
+			}
+			
+			var color = {r: material.r, g: material.g, b: material.b, a: material.a};
+
+			if (mode == 0) {
+				threeDObject.findParentByType("enable").setEnabled(true);
+			} else if (mode == 1) {
+				threeDObject.findParentByType("enable").setEnabled(true);
+				color.a = 0.5;
+				color.r = 0.5;
+				color.g = 0.5;
+				color.b = 0.5;
+				if (o.selectedId == object.oid) {
+					threeDObject.getNode("highlight").set("alpha", 0.5);
+				}
+			} else if (mode == 2) {
+				threeDObject.findParentByType("enable").setEnabled(false);
+			}
+			
+			o.changeColorOfObject(object, color);
+		}
+	};
+	
+	this.changeColorOfObject = function(object, color){
+		var threeDObject = o.viewer.scene.findNode(object.oid);
+		if (threeDObject != null) {
+			var matrix = threeDObject.nodes[0];
+			var geometryNode = matrix.nodes[0];
+			if (geometryNode._core.arrays.colors != null) {
+				var groupId = threeDObject.findParentByType("translate").data.groupId;
+				
+				var geometry = {
+					type: "geometry",
+					primitive: "triangles"
+				};
+		
+				geometry.coreId = geometryNode.getCoreId() + "_Visualization";
+				geometry.indices = geometryNode._core.arrays.indices;
+				geometry.positions = geometryNode._core.arrays.positions;
+				geometry.normals = geometryNode._core.arrays.normals;
+				
+				geometry.colors = [];
+				for (var i=0; i<geometryNode._core.arrays.colors.length; i+=4) {
+					geometry.colors[i] = color.r;
+					geometry.colors[i+1] = color.g;
+					geometry.colors[i+2] = color.b;
+					geometry.colors[i+3] = color.a;
+				}
+				
+				var library = o.viewer.scene.findNode("library-" + groupId);
+				library.add("node", geometry);
+				
+				var newGeometry = {
+					type: "geometry",
+					coreId: geometryNode.getCoreId() + "_Visualization"
+				}
+				
+				matrix.removeNode(geometryNode);
+				matrix.addNode(newGeometry);
+			} else {
+				threeDObject.findParentByType("flags").set("flags", {transparent: color.a < 1});
+				threeDObject.parent.set("alpha", color.a);
+				threeDObject.parent.set("baseColor", {r: color.r, g: color.g, b: color.b});
+			}
+		} else {
+			console.log("not found");
+		}
+	};
+	
+	this.updateVisibility = function(object) {
+		var threeDObject = o.viewer.scene.findNode(object.oid);
+		var mode = object.trans.mode;
+		if (threeDObject != null) {
+			var matrix = threeDObject.nodes[0];
+			var geometryNode = matrix.nodes[0];
+			if (mode == 0) {
+				threeDObject.findParentByType("enable").setEnabled(true);
+				if (geometryNode._core.arrays.colors != null) {
+					if (object.trans.colorOverride != null) {
+						o.changeColorOfObject(object, object.trans.colorOverride);
+					} else {
+						if (geometryNode.coreId != null && ("" + geometryNode.coreId).endsWith("_Visualization")) {
+							// This is a complex-material object which had been modified, return it to the old state
+							if (geometryNode._core.arrays.colors != null) {
+								matrix.removeNode(geometryNode);
+								
+								var newGeometry = {
+									type: "geometry",
+									coreId: geometryNode.getCoreId().replace("_Visualization", "")
+								}
+								
+								matrix.addNode(newGeometry);
+							}
+						}
+					}
+				} else {
+					if (object.trans.colorOverride != null) {
+						o.changeColorOfObject(object, object.trans.colorOverride);
+					} else {
+						var material = BIMSURFER.Constants.materials[object.getType()];
+						// Hack to get the roof to be red.....
+						if (object.getType() == "IfcSlab") {
+							if (object.getPredefinedType() == "ROOF") {
+								material = BIMSURFER.Constants.materials["IfcRoof"];
+							}
+						}
+						if (material == null) {
+							material = BIMSURFER.Constants.materials.DEFAULT;
+						}
+						
+						var color = {r: material.r, g: material.g, b: material.b, a: material.a};
+						o.changeColorOfObject(object, color);
+					}
+				}
+			} else if (mode == 1) {
+				threeDObject.findParentByType("enable").setEnabled(true);
+				var color = {};
+				color.a = 0.5;
+				color.r = 0.5;
+				color.g = 0.5;
+				color.b = 0.5;
+				if (o.selectedId == object.oid) {
+					threeDObject.getNode("highlight").set("alpha", 0.5);
+				}
+				o.changeColorOfObject(object, color);
+			} else if (mode == 2) {
+				threeDObject.findParentByType("enable").setEnabled(false);
+			}
+		}
+	};
+	
+	this.objectVisibilityChanged = function(objects){
+		// todo use groupid
+		
+		var uniqueRoids = [];
+		
+		if (!Array.isArray(objects)) {
+			objects = [objects];
+		}
+
+		var oidsNotLoaded = [];
+
+		for (var i=0; i<objects.length; i++) {
+			var object = objects[i];
+			
+			if (i == 0) {
+				// TODO actually do something useful here
+				uniqueRoids.push(object.model.roid);
+			}
+			
+			o.updateVisibility(object);
+			
+			if (o.loadedOids[object.oid] == null) {
+				if (object.isA("IfcProduct")) {
+					// Assuming sync return here because of preloading!!
+					object.getRepresentation(function(representation){
+						if (representation != null) {
+							if (Settings.getDefaultHiddenTypes()[object.getType()] == null || object.trans.mode == 0) {
+								oidsNotLoaded.push(object.oid);
+							}
+						}
+					});
+				}
+			}
+		}
+		if (oidsNotLoaded.length > 0) {
+			var models = {};
+			uniqueRoids.forEach(function(roid){
+				models[roid] = parent.models[roid];
+			});
+			var geometryLoader = new GeometryLoader(Global.bimServerApi, models, o.viewer);
+
+			var progressdiv = $("<div class=\"progressdiv\">");
+			var text = $("<div class=\"text\">");
+			text.html("Loading");
+			var progress = $("<div class=\"progress progress-striped\">");
+			var progressbar = $("<div class=\"progress-bar\">");
+			progressdiv.append(text)
+			progressdiv.append(progress);
+			progress.append(progressbar);
+			
+			containerDiv.find(".progressbars").append(progressdiv);
+
+			geometryLoader.addProgressListener(function(progress, nrObjectsRead, totalNrObjects){
+				text.html("Loading... (" + nrObjectsRead + "/" + totalNrObjects + ")");
+				if (progress == "done") {
+					progressdiv.fadeOut(800);
+				} else {
+					progressbar.css("width", progress + "%");
+				}
+			});
+			geometryLoader.setLoadOids(uniqueRoids, oidsNotLoaded);
+			
+			// This might be needed when the geometryloader comes up with more objects than requested...
+			geometryLoader.objectAddedListeners.push(function(oid){
+				models[uniqueRoids[0]].get(oid, function(object){
+					o.updateVisibility(object);
+				});
+				o.loadedOids[oid] = true;
+			});
+			geometryLoader.progressListeners.push(function(state){
+				if (state == "done") {
+					for (var i=0; i<oidsNotLoaded.length; i++) {
+						o.loadedOids[oidsNotLoaded[i]] = true;
+					}
+					o.resize();
+				}
+			});
+			o.viewer.loadGeometry(geometryLoader);
+		}
+	};
+
+	this.resize = function(){
+		var width = Math.round($(window).width() / 3 * 2 - 59);
+		var height = ($(window).height() - $(".navbar").outerHeight() - $(".navbar-header").outerHeight() - $(".right .panel-heading").outerHeight() - 80);
+		$("div#viewport").width(width + "px");
+		$("div#viewport").height(height + "px");
+		o.viewer.resize($('div#viewport').width(), $('div#viewport').height());
+	};
+	
+	this.unloadRevision = function(poid, roid) {
+		if (roid != -1) {
+			var node = o.viewer.scene.findNode("model_node_" + roid);
+			if (node != null) {
+				node.destroy();
+				var boundsTranslate = o.viewer.scene.findNode("bounds_translate");
+				if (boundsTranslate.nodes.length == 0) {
+					// If this was the last model, let's clear the bound_translate as well, so we can start with a fresh one after this
+					boundsTranslate.destroy();
+				}
+			}
+		}
+	};
+
+	this.loadRevision = function(project, roid){
+		/*
+			This checks whether there are visualization overrides, example:
+			{
+				  "name": "Test",
+				  "changes": [{
+				    "selector": {
+				      "guids": ["16DNNqzfP2thtfaOflvsKA"]
+				   	},
+				    "effect": {
+						"color": {
+						  "r": 0,
+						  "g": 1,
+						  "b": 0,
+						  "a": 1
+						}
+				   	}
+				  }]
+				}
+		*/
+		Global.bimServerApi.callWithNoIndication("Bimsie1ServiceInterface", "getExtendedDataSchemaByNamespace", {namespace: "http://bimserver.org/3dvisualizationeffects"}, function(schema){
+			if (schema != null) {
+				var lastExtendedData = null;
+				Global.bimServerApi.call("Bimsie1ServiceInterface", "getAllExtendedDataOfRevision", {roid: roid}, function(list){
+					list.forEach(function(extendedData){
+						if (extendedData.schemaId == schema.oid) {
+							if (lastExtendedData == null || extendedData.added > lastExtendedData.added) {
+								lastExtendedData = extendedData;
+							}
+						}
+					});
+					if (lastExtendedData != null) {
+						Global.bimServerApi.call("ServiceInterface", "getFile", {fileId: lastExtendedData.fileId}, function(file){
+							var data = atob(file.data);
+							var vis = JSON.parse(data);
+							var div = $("<div class=\"checkbox\">");
+							var label = $("<label></label>");
+							div.append(label);
+							var checkbox = $("<input type=\"checkbox\"/>");
+							checkbox.change(function(){
+								var checked = $(this).is(":checked");
+								var guids = [];
+								var map = {};
+								vis.changes.forEach(function(change){
+									guids = guids.concat(change.selector.guids);
+									change.selector.guids.forEach(function(guid){
+										map[guid] = change;
+									});
+								});
+								var model = parent.models[roid];
+								var objects = [];
+								model.getByGuids(guids, function(object){
+									var change = map[object.getGlobalId()];
+									objects.push(object);
+									object.trans.mode = 0;
+									if (checked) {
+										object.trans.colorOverride = change.effect.color;
+									} else {
+										object.trans.colorOverride = null;
+									}
+								}).done(function(){
+									o.objectVisibilityChanged(objects);
+								});
+							});
+							label.append(checkbox);
+							label.append(vis.name);
+							containerDiv.find(".visualization").show();
+							containerDiv.find(".visualization .panel-body").append(div);
+						});
+					}
+				});
+			}
+		});
+	};
+	
+	this.close = function(){
+		console.log("close");
+//		parent.selectListeners.unregister(o.selected);
+//		parent.unselectListeners.unregister(o.unselected);
+//		parent.objectVisibilityListeners.unregister(o.objectVisibilityChanged);
+//		parent.modelLoadedListeners.unregister(o.loadRevision);
+//		parent.modelUnloadedListeners.unregister(o.unloadRevision);
+	};
+	
+	containerDiv.find(".waiting").hide();
+	
+	parent.selectListeners.register(o.selected);
+	parent.unselectListeners.register(o.unselected);
+	parent.objectVisibilityListeners.register(o.objectVisibilityChanged);
+	parent.modelLoadedListeners.register(o.loadRevision);
+	parent.modelUnloadedListeners.register(o.unloadRevision);
+
+	$("#viewport").on("contextmenu", function(e){
+		e.preventDefault();
+	});
+	
+	$(".btnScreenShot").click(function(){
+		o.viewer.capture().done(function(test){
+			console.log(test);
+			$(".screenshot").attr("src", test.src);
+		});
+	});
+}
+</script>
